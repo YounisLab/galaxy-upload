@@ -1,0 +1,2 @@
+lftp >= 4.6.3a
+bioblend >= 0.10.0
