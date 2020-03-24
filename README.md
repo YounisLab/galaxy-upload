@@ -10,7 +10,6 @@ If using outside of Docker, the requirements can be installed using
 
 ```
 conda install -c bioconda --yes --file requirements.txt
-sudo apt-get install lftp
 ```
 
 ## Building

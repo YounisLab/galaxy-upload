@@ -4,23 +4,34 @@
 Uploads all .bw and junctions.bed files to genome browser and
 generates links to view them in the UCSC browser.
 
-NOTE: The lftp_upload.sh script must be present in the same
-directory.
-
-NOTE: If lftp is being unresponsive, try the script again
-after 2-3 minutes. This is usegalaxy.org throttling against
-DDoS atacks.
-
 NOTE: files uploaded to galaxy FTP are deleted after 3 days.
 """
 
 import glob
 import argparse
 import getpass
+import os
+
+import ssl
+import ftplib
 
 import subprocess as sp
 
 from bioblend import galaxy
+
+# Explicit FTPS with shared TLS session
+class FTPS_connect(ftplib.FTP_TLS):
+
+  def ntransfercmd(self, cmd, rest=None):
+      conn, size = ftplib.FTP.ntransfercmd(self, cmd, rest)
+      if self._prot_p:
+          session = self.sock.session
+          if isinstance(self.sock, ssl.SSLSocket):
+                  session = self.sock.session
+          conn = self.context.wrap_socket(conn,
+                                          server_hostname=self.host,
+                                          session=session) 
+      return conn, size
 
 track_str_bw = "track name=%s description=%s type=bigWig visibility=2 db=hg38 bigDataUrl=https://usegalaxy.org/datasets/%s/display?to_ext=txt\n"
 track_str_bed = "track name=%s description=%s visibility=2 db=hg38 useScore=1"
@@ -44,23 +55,32 @@ print (">>> Enter FTP password below.")
 password = getpass.getpass()
 
 # # Open a galaxy instance using the api key.
-gi = galaxy.GalaxyInstance(url='usegalaxy.org', key=args.api_key)
+gi = galaxy.GalaxyInstance(url="https://usegalaxy.org", key=args.api_key)
 histid = gi.histories.get_most_recently_used_history()["id"]
 
 # First upload all .bw files to the galaxy FTP server.
-# NOTE: ftplib has issues with galaxy FTP, hence the lftp script.
-print(">>> Uploading .bw files to FTP server.")
-print(">>> Executing ./lftp_upload.sh %s %s %s" % (args.username, "*****", args.dir))
-p = sp.call(["./lftp_upload.sh", args.username, password, args.dir])
+print (">>> Uploading .bw files to FTP server.")
+
+# Set up FTPS connection
+ftps = FTPS_connect (host="usegalaxy.org", user=args.username, passwd=password)
+ftps.prot_p()
+
+# Upload all .bw filenames to the galaxy FTP server.
+for filename in (glob.glob(args.dir + "/*.bw")):
+    f = open(filename, "rb")
+    print (">>> Uploading %s to usegalaxy.org.\n" % filename)
+    bwname = os.path.basename(filename)
+    cmd = "STOR " + bwname
+    ftps.storbinary (cmd, f)
 
 # Store all .bw filenames into a dict for easy access later.
 # glob returns a list, so this works nicely.
-for f in (glob.glob(args.dir + "/*.bw")):
-    bwname = f.split("/")[-1]
+for filename in (glob.glob(args.dir + "/*.bw")):
+    bwname = os.path.basename(filename)
     bwfiles[bwname] = 1
 
 track_filename = args.proj_name + ".txt"
-track_file = open(track_filename, "w+")
+track_file = open (track_filename, "w+")
 track_file.write("browser hide all \nbrowser full ruler \nbrowser pack refGene knownGene \n")
 
 # Push .bw file on FTP server to history and
@@ -79,13 +99,18 @@ for f in glob.glob(args.dir + "/*.bed"):
     print (">>> Appending %s to track_file." % f)
     track_file.write("browser hide all \nbrowser full ruler \nbrowser pack refGene knownGene \n")
     track_file.write(track_str_bed % (f.split("/")[-1], f.split("/")[-1]) + "\n")
-    track_file.write(open(f).read())
-    
+    track_file.write(open (f).read())
+
 track_file.close()
 
-print(">>> Uploading track file to FTP and generating link...")
+print (">>> Uploading track file to FTP and generating link...")
 
-p = sp.call(["lftp", "-c", "open -u %s,%s usegalaxy.org; put %s" % (args.username, password, track_filename)])
+f = open (track_filename, "rb")
+cmd = "STOR " + track_filename
+ftps.storbinary (cmd, f)
+
+ftps.close()
+f.close()
 
 # Get track_file url from FTP server.
 for f in gi.ftpfiles.get_ftp_files():
@@ -93,9 +118,9 @@ for f in gi.ftpfiles.get_ftp_files():
         print (">>> Moving track-file to default history.")
         r = gi.tools.upload_from_ftp(f["path"], histid)
         url = r["outputs"][0]["id"]
-        break;
+        break
 
-f = open(args.proj_name + "_URL.txt", "w+")
+f = open (args.proj_name + "_URL.txt", "w+")
 f.write((ucsc_str % url).strip())
 f.close()
 print (">>> Track file url saved to %s.url\n" % args.proj_name)

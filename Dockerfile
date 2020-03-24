@@ -9,7 +9,4 @@ COPY requirements.txt /home
 
 RUN conda install --yes --file requirements.txt
 
-# install lftp from package manager
-RUN apt-get update && apt-get install -y lftp
-
 CMD ["/bin/bash"]
